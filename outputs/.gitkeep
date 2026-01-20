@@ -1,0 +1,7 @@
+# This directory will contain processed outputs
+
+Each run will create a timestamped subdirectory with:
+- Intermediate outputs from each sub-agent
+- Final draft
+- Change logs
+- Quality assessment
