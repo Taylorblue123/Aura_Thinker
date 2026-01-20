@@ -1,7 +1,14 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Upload, Link, FileText, Send, Loader2 } from 'lucide-react'
+import toast from 'react-hot-toast'
+import useAppStore from '../store/useAppStore'
+import apiClient from '../lib/api'
 
 const LearningInput = () => {
+  const navigate = useNavigate()
+  const { setCurrentSession, addSession, setLoading } = useAppStore()
+
   const [inputType, setInputType] = useState('text')
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
@@ -13,28 +20,93 @@ const LearningInput = () => {
   const handleSubmit = async (e) => {
     e.preventDefault()
     setIsProcessing(true)
-
-    const learningData = {
-      title,
-      type: inputType,
-      content: inputType === 'text' ? content : inputType === 'url' ? url : file?.name,
-      tags: tags.split(',').map(t => t.trim()).filter(Boolean),
-      timestamp: new Date().toISOString()
-    }
+    setLoading(true)
 
     try {
-      // TODO: Send to API
-      console.log('Submitting learning material:', learningData)
+      // Prepare the data based on input type
+      let processedContent = content
 
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      if (inputType === 'url') {
+        // For URL, we'll send the URL to be fetched on backend
+        processedContent = url
+      } else if (inputType === 'file' && file) {
+        // For file upload, we'll need to handle it differently
+        // For now, just use the file name as placeholder
+        processedContent = `[File: ${file.name}]`
+        // TODO: Implement actual file upload
+      }
 
-      // TODO: Navigate to coach Q&A page with session ID
-      alert('学习资料已提交，即将开始认知教练提问...')
+      // Create the session
+      const sessionData = {
+        title: title || 'Untitled Session',
+        type: inputType,
+        content: processedContent,
+        tags: tags.split(',').map(t => t.trim()).filter(Boolean)
+      }
+
+      console.log('Creating session with data:', sessionData)
+
+      // Call API to create session
+      const response = await apiClient.sessions.create(sessionData)
+
+      if (response.id) {
+        // Store session in global state
+        const newSession = {
+          ...sessionData,
+          id: response.id,
+          status: 'analyzing',
+          createdAt: new Date().toISOString()
+        }
+
+        setCurrentSession(newSession)
+        addSession(newSession)
+
+        toast.success('学习资料已提交，正在分析...')
+
+        // Start the analysis process
+        setTimeout(async () => {
+          try {
+            // Generate questions for this session
+            await apiClient.questions.generate(response.id)
+            toast.success('问题生成完成，即将开始认知教练提问')
+
+            // Navigate to coach page with session ID
+            navigate(`/coach/${response.id}`)
+          } catch (error) {
+            console.error('Error generating questions:', error)
+            toast.error('生成问题失败，请重试')
+            setIsProcessing(false)
+            setLoading(false)
+          }
+        }, 1500)
+      } else {
+        throw new Error('Failed to create session')
+      }
+
     } catch (error) {
       console.error('Error submitting:', error)
-    } finally {
+      toast.error('提交失败，请检查后端服务是否运行')
       setIsProcessing(false)
+      setLoading(false)
+    }
+  }
+
+  const handleFileChange = async (e) => {
+    const selectedFile = e.target.files[0]
+    if (selectedFile) {
+      setFile(selectedFile)
+
+      // If it's a text file, try to read its content
+      if (selectedFile.type.startsWith('text/') ||
+          selectedFile.name.endsWith('.md') ||
+          selectedFile.name.endsWith('.txt')) {
+        try {
+          const text = await selectedFile.text()
+          setContent(text)
+        } catch (error) {
+          console.error('Error reading file:', error)
+        }
+      }
     }
   }
 
@@ -55,7 +127,7 @@ const LearningInput = () => {
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Title */}
           <div>
-            <label className="block text-sm font-medium mb-2">学习主题</label>
+            <label className="block text-sm font-medium mb-2">学习主题 *</label>
             <input
               type="text"
               value={title}
@@ -63,6 +135,7 @@ const LearningInput = () => {
               placeholder="例如：AI Agent 深度研究"
               className="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
               required
+              disabled={isProcessing}
             />
           </div>
 
@@ -75,11 +148,12 @@ const LearningInput = () => {
                   key={id}
                   type="button"
                   onClick={() => setInputType(id)}
+                  disabled={isProcessing}
                   className={`p-4 border rounded-lg transition-colors ${
                     inputType === id
                       ? 'border-primary bg-primary/10'
                       : 'border-border hover:border-primary/50'
-                  }`}
+                  } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <Icon className="h-6 w-6 mx-auto mb-2" />
                   <span className="text-sm">{label}</span>
@@ -90,7 +164,7 @@ const LearningInput = () => {
 
           {/* Input Content Based on Type */}
           <div>
-            <label className="block text-sm font-medium mb-2">学习内容</label>
+            <label className="block text-sm font-medium mb-2">学习内容 *</label>
 
             {inputType === 'text' && (
               <textarea
@@ -99,6 +173,7 @@ const LearningInput = () => {
                 placeholder="粘贴你的学习笔记、文章内容或思考..."
                 className="w-full h-64 px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                 required
+                disabled={isProcessing}
               />
             )}
 
@@ -110,6 +185,7 @@ const LearningInput = () => {
                 placeholder="https://example.com/article"
                 className="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
                 required
+                disabled={isProcessing}
               />
             )}
 
@@ -117,20 +193,28 @@ const LearningInput = () => {
               <div className="border-2 border-dashed border-border rounded-lg p-8">
                 <input
                   type="file"
-                  onChange={(e) => setFile(e.target.files[0])}
+                  onChange={handleFileChange}
                   accept=".pdf,.txt,.md,.doc,.docx"
                   className="hidden"
                   id="file-upload"
-                  required
+                  required={!file}
+                  disabled={isProcessing}
                 />
                 <label
                   htmlFor="file-upload"
-                  className="flex flex-col items-center cursor-pointer"
+                  className={`flex flex-col items-center cursor-pointer ${
+                    isProcessing ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                 >
                   <Upload className="h-12 w-12 text-muted-foreground mb-4" />
                   <span className="text-sm text-muted-foreground">
                     {file ? file.name : '点击上传文件（PDF, TXT, MD, DOC）'}
                   </span>
+                  {file && content && (
+                    <span className="text-xs text-muted-foreground mt-2">
+                      已读取 {content.length} 字符
+                    </span>
+                  )}
                 </label>
               </div>
             )}
@@ -145,6 +229,7 @@ const LearningInput = () => {
               onChange={(e) => setTags(e.target.value)}
               placeholder="AI, 机器学习, 产品设计（用逗号分隔）"
               className="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+              disabled={isProcessing}
             />
           </div>
 
@@ -159,7 +244,8 @@ const LearningInput = () => {
                 setFile(null)
                 setTags('')
               }}
-              className="px-4 py-2 border border-border rounded-md hover:bg-secondary transition-colors"
+              disabled={isProcessing}
+              className="px-4 py-2 border border-border rounded-md hover:bg-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               清空
             </button>
